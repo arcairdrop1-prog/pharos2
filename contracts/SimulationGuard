@@ -1,0 +1,70 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+/**
+ * @title SimulationGuard
+ * @dev Contrato para simulação prévia e proteção de execução de transações.
+ */
+contract SimulationGuard {
+    
+    struct SimulationReport {
+        bool success;
+        bytes returnOrErrorData;
+        uint256 gasUsed;
+    }
+
+    event TransactionSimulated(address indexed target, bool success, uint256 gasUsed);
+    event ExecutionBlocked(string reason);
+
+    /**
+     * @dev Simula uma chamada a um contrato externo para verificar sucesso, dados de retorno e consumo de gás.
+     */
+    function simulate(
+        address target,
+        bytes calldata data
+    ) external returns (SimulationReport memory) {
+        uint256 startGas = gasleft();
+        
+        // Executa a chamada de teste de forma isolada
+        (bool success, bytes memory resultData) = target.call(data);
+        
+        uint256 gasUsed = startGas - gasleft();
+
+        emit TransactionSimulated(target, success, gasUsed);
+
+        return SimulationReport({
+            success: success,
+            returnOrErrorData: resultData,
+            gasUsed: gasUsed
+        });
+    }
+
+    /**
+     * @dev Executa a transação aplicando o safety guard: bloqueia e reverte automaticamente se falhar ou exceder o limite de gás.
+     */
+    function executeWithGuard(
+        address target,
+        bytes calldata data,
+        uint256 maxGasAllowed
+    ) external payable returns (bytes memory) {
+        uint256 startGas = gasleft();
+        
+        (bool success, bytes memory resultData) = target.call{value: msg.value}(data);
+        
+        uint256 gasUsed = startGas - gasleft();
+
+        // Requisito 4: Bloqueia a execução automaticamente se a simulação/execução falhar
+        if (!success) {
+            emit ExecutionBlocked("Simulacao falhou: erro na execucao do contrato alvo");
+            // Propaga o motivo exato da reversão original
+            assembly {
+                revert(add(resultData, 32), mload(resultData))
+            }
+        }
+
+        // Validação do limite de gás previsto
+        require(gasUsed <= maxGasAllowed, "SimulationGuard: Custo de gas acima do limite seguro");
+
+        return resultData;
+    }
+}
